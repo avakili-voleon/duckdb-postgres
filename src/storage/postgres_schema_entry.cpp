@@ -75,9 +75,9 @@ optional_ptr<CatalogEntry> PostgresSchemaEntry::CreateIndex(CatalogTransaction t
 	return indexes.CreateIndex(postgres_transaction, info, table);
 }
 
-string PGGetCreateViewSQL(PostgresSchemaEntry &schema, CreateViewInfo &info) {
+string PGGetCreateViewSQL(PostgresSchemaEntry &schema, CreateViewInfo &info, bool or_replace) {
 	string sql;
-	sql = "CREATE VIEW ";
+	sql = or_replace ? "CREATE OR REPLACE VIEW " : "CREATE VIEW ";
 	sql += PostgresUtils::QuotePostgresIdentifier(schema.name.GetIdentifierName()) + ".";
 	sql += PostgresUtils::QuotePostgresIdentifier(info.GetViewName().GetIdentifierName());
 	sql += " ";
@@ -97,10 +97,32 @@ string PGGetCreateViewSQL(PostgresSchemaEntry &schema, CreateViewInfo &info) {
 	return sql;
 }
 
+//! Replaces the view in place, which keeps its OID so that dependent views stay bound.
+//! Returns false if Postgres rejects the new definition as incompatible with the existing columns.
+static bool TryReplaceViewInPlace(PostgresSchemaEntry &schema, PostgresTransaction &transaction, CreateViewInfo &info) {
+	// a failed statement aborts the whole Postgres transaction, so the attempt needs its own savepoint
+	transaction.Query("SAVEPOINT duckdb_replace_view");
+	string error_message;
+	string sqlstate;
+	auto result = transaction.TryQuery(PGGetCreateViewSQL(schema, info, true), error_message, sqlstate);
+	if (result) {
+		transaction.Query("RELEASE SAVEPOINT duckdb_replace_view");
+		return true;
+	}
+	transaction.Query("ROLLBACK TO SAVEPOINT duckdb_replace_view; RELEASE SAVEPOINT duckdb_replace_view");
+	// 42P16 (invalid_table_definition): the new query renames, retypes or removes existing columns
+	if (sqlstate != "42P16") {
+		throw std::runtime_error(error_message);
+	}
+	return false;
+}
+
 optional_ptr<CatalogEntry> PostgresSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
 	if (info.sql.empty()) {
 		throw BinderException("Cannot create view in Postgres that originated from an empty SQL statement");
 	}
+	auto &postgres_transaction = GetPostgresTransaction(transaction);
+	auto view_name = info.GetViewName().GetIdentifierName();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT ||
 	    info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
 		auto current_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.GetViewName());
@@ -108,13 +130,15 @@ optional_ptr<CatalogEntry> PostgresSchemaEntry::CreateView(CatalogTransaction tr
 			if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
 				return current_entry;
 			}
-			// CREATE OR REPLACE - drop any existing entries first (if any)
-			TryDropEntry(transaction.GetContext(), CatalogType::VIEW_ENTRY, info.GetViewName().GetIdentifierName());
+			if (TryReplaceViewInPlace(*this, postgres_transaction, info)) {
+				return tables.ReloadEntry(postgres_transaction, view_name);
+			}
+			// the new definition is incompatible - drop the existing view and create it again
+			TryDropEntry(transaction.GetContext(), CatalogType::VIEW_ENTRY, view_name);
 		}
 	}
-	auto &postgres_transaction = GetPostgresTransaction(transaction);
-	postgres_transaction.Query(PGGetCreateViewSQL(*this, info));
-	return tables.ReloadEntry(postgres_transaction, info.GetViewName().GetIdentifierName());
+	postgres_transaction.Query(PGGetCreateViewSQL(*this, info, false));
+	return tables.ReloadEntry(postgres_transaction, view_name);
 }
 
 optional_ptr<CatalogEntry> PostgresSchemaEntry::CreateType(CatalogTransaction transaction, CreateTypeInfo &info) {

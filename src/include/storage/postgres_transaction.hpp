@@ -37,6 +37,8 @@ public:
 
 	string GetDSN();
 	unique_ptr<PostgresResult> Query(const string &query);
+	//! Returns nullptr on failure, filling in the error message and the Postgres SQLSTATE
+	unique_ptr<PostgresResult> TryQuery(const string &query, string &error_message, string &sqlstate);
 	unique_ptr<PostgresResult> QueryWithoutTransaction(const string &query);
 	vector<unique_ptr<PostgresResult>> ExecuteQueries(ClientContext &context, const string &queries);
 	static PostgresTransaction &Get(ClientContext &context, Catalog &catalog);

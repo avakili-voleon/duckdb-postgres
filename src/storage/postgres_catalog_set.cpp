@@ -200,7 +200,7 @@ optional_ptr<CatalogEntry> PostgresCatalogSet::CreateEntry(PostgresTransaction &
 		throw InternalException("PostgresCatalogSet::CreateEntry called with empty name");
 	}
 	entry_map.insert(make_pair(result->name, result->name));
-	entries.insert(make_pair(result->name, std::move(entry)));
+	entries[result->name.GetIdentifierName()] = std::move(entry);
 	return result;
 }
 

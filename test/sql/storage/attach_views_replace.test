@@ -1,0 +1,125 @@
+# name: test/sql/storage/attach_views_replace.test
+# description: Test CREATE OR REPLACE VIEW on a view that other views depend on
+# group: [storage]
+
+require postgres_scanner
+
+require-env POSTGRES_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'dbname=postgresscanner' AS s (TYPE POSTGRES)
+
+statement ok
+USE s;
+
+statement ok
+DROP VIEW IF EXISTS replace_dependent
+
+statement ok
+DROP VIEW IF EXISTS replace_base
+
+statement ok
+CREATE VIEW replace_base AS SELECT 1 AS i
+
+statement ok
+CREATE VIEW replace_dependent AS SELECT i FROM replace_base
+
+# a compatible replacement happens in place, so the dependent view stays bound
+statement ok
+CREATE OR REPLACE VIEW replace_base AS SELECT 2 AS i
+
+query I
+SELECT i FROM replace_dependent
+----
+2
+
+# appending a column is compatible, and the new column is visible through the catalog
+statement ok
+CREATE OR REPLACE VIEW replace_base AS SELECT 3 AS i, 'x' AS j
+
+query IT
+SELECT i, j FROM replace_base
+----
+3	x
+
+query I
+SELECT * FROM replace_dependent
+----
+3
+
+# an incompatible replacement falls back to drop and create, which Postgres refuses while dependents exist
+statement error
+CREATE OR REPLACE VIEW replace_base AS SELECT 4 AS k
+----
+cannot drop view
+
+query IT
+SELECT i, j FROM replace_base
+----
+3	x
+
+query I
+SELECT * FROM replace_dependent
+----
+3
+
+# in place replacement inside an explicit transaction, rolled back
+statement ok
+BEGIN
+
+statement ok
+CREATE OR REPLACE VIEW replace_base AS SELECT 5 AS i, 'y' AS j
+
+query I
+SELECT * FROM replace_dependent
+----
+5
+
+statement ok
+ROLLBACK
+
+query IT
+SELECT i, j FROM replace_base
+----
+3	x
+
+# in place replacement inside an explicit transaction, committed
+statement ok
+BEGIN
+
+statement ok
+CREATE OR REPLACE VIEW replace_base AS SELECT 6 AS i, 'z' AS j
+
+statement ok
+COMMIT
+
+query I
+SELECT * FROM replace_dependent
+----
+6
+
+# an incompatible replacement of a view with no dependents falls back inside an explicit transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE OR REPLACE VIEW replace_dependent AS SELECT 'a' AS renamed
+
+query T
+SELECT renamed FROM replace_dependent
+----
+a
+
+statement ok
+COMMIT
+
+query T
+SELECT renamed FROM replace_dependent
+----
+a
+
+statement ok
+DROP VIEW replace_dependent
+
+statement ok
+DROP VIEW replace_base

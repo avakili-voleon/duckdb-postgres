@@ -96,7 +96,8 @@ PGresult *PostgresConnection::PQExecute(optional_ptr<ClientContext> context, con
 
 unique_ptr<PostgresResult> PostgresConnection::TryQuery(optional_ptr<ClientContext> context, const string &query,
                                                         optional_ptr<string> error_message,
-                                                        const PostgresParameters &params, int format) {
+                                                        const PostgresParameters &params, int format,
+                                                        optional_ptr<string> sqlstate) {
 	lock_guard<mutex> guard(connection->connection_lock);
 	auto result = PQExecute(context, query.c_str(), params, format);
 
@@ -104,6 +105,12 @@ unique_ptr<PostgresResult> PostgresConnection::TryQuery(optional_ptr<ClientConte
 		if (error_message) {
 			auto error = result ? PQresultErrorMessage(result) : PQerrorMessage(GetConn());
 			*error_message = StringUtil::Format("Failed to execute query \"" + query + "\": " + string(error));
+		}
+		if (sqlstate && result) {
+			auto state = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+			if (state) {
+				*sqlstate = state;
+			}
 		}
 		PQclear(result);
 		return nullptr;

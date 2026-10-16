@@ -51,7 +51,8 @@ public:
 	             const PostgresParameters &params = PostgresParameters(), int format = 0);
 	unique_ptr<PostgresResult> TryQuery(optional_ptr<ClientContext> context, const string &query,
 	                                    optional_ptr<string> error_message = nullptr,
-	                                    const PostgresParameters &params = PostgresParameters(), int format = 0);
+	                                    const PostgresParameters &params = PostgresParameters(), int format = 0,
+	                                    optional_ptr<string> sqlstate = nullptr);
 	unique_ptr<PostgresResult> Query(optional_ptr<ClientContext> context, const string &query,
 	                                 const PostgresParameters &params = PostgresParameters(), int format = 0);
 

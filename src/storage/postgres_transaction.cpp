@@ -115,6 +115,18 @@ unique_ptr<PostgresResult> PostgresTransaction::Query(const string &query) {
 	return con.Query(GetContext(), query);
 }
 
+unique_ptr<PostgresResult> PostgresTransaction::TryQuery(const string &query, string &error_message, string &sqlstate) {
+	auto &con = GetConnectionRaw();
+	if (transaction_state == PostgresTransactionState::TRANSACTION_NOT_YET_STARTED) {
+		transaction_state = PostgresTransactionState::TRANSACTION_STARTED;
+		string transaction_start = GetBeginTransactionQuery();
+		transaction_start += ";\n";
+		return con.TryQuery(GetContext(), transaction_start + query, &error_message, PostgresParameters(), 0,
+		                    &sqlstate);
+	}
+	return con.TryQuery(GetContext(), query, &error_message, PostgresParameters(), 0, &sqlstate);
+}
+
 unique_ptr<PostgresResult> PostgresTransaction::QueryWithoutTransaction(const string &query) {
 	auto &con = GetConnectionRaw();
 	if (transaction_state == PostgresTransactionState::TRANSACTION_STARTED) {
